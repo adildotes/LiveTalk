@@ -63,7 +63,7 @@ const Profile = () => {
 
     // agar user ne cancel nahi kiya
     if (!result.canceled) {
-      const image = result.assets[0]; // ✅ yahan se { uri: ... } milega
+      const image = result.assets[0];
       console.log("Selected image:", image.uri);
 
       // Cloudinary upload function call karo
