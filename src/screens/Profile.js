@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+// screens/Profile.js
+import React, { useState, useEffect } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import {
   Text,
@@ -13,12 +14,20 @@ import {
   Dimensions,
   ScrollView,
 } from "react-native";
+import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { updateProfile } from "firebase/auth";
-import { doc, updateDoc, setDoc, getDoc } from "firebase/firestore";
-import { auth, storage, db } from "../config/firebase";
+import {
+  doc,
+  updateDoc,
+  setDoc,
+  getDoc,
+  collection,
+  getDocs,
+} from "firebase/firestore";
+import { auth, db } from "../config/firebase";
 import { colors } from "../config/constants";
+import { CLOUDINARY_CONFIG } from "../config/cloudinary";
 
 const { width } = Dimensions.get("window");
 
@@ -29,69 +38,95 @@ const Profile = () => {
   const [name, setName] = useState(user?.displayName || "");
   const [photoURL, setPhotoURL] = useState(user?.photoURL || null);
 
-  // 📸 Image Picker
+  // Check Cloudinary Config on mount
+  useEffect(() => {
+    console.log("🔍 CLOUDINARY CONFIG:", CLOUDINARY_CONFIG);
+  }, []);
+
+  // Request permission once on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      } catch { }
+    })();
+  }, []);
+
+  // Pick image
   const pickImage = async () => {
+    // open gallery
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.7,
+      quality: 1,
     });
 
+    // agar user ne cancel nahi kiya
     if (!result.canceled) {
-      uploadImage(result.assets[0].uri);
+      const image = result.assets[0]; // ✅ yahan se { uri: ... } milega
+      console.log("Selected image:", image.uri);
+
+      // Cloudinary upload function call karo
+      const uploadedUrl = await uploadImageToCloudinary(image);
+      console.log("Uploaded Image URL:", uploadedUrl);
     }
   };
 
-  // ☁️ Upload to Firebase Storage
-  const uploadImage = async (uri) => {
+  // Upload image to Cloudinary
+  const uploadImageToCloudinary = async (image) => {
     try {
-      if (!user) return;
-      setUploading(true);
-      const response = await fetch(uri);
-      const blob = await response.blob();
+      // ✅ image.uri milta hai ImagePicker se
+      const base64 = await FileSystem.readAsStringAsync(image.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
 
-      const imageRef = ref(storage, `profiles/${user.uid}.jpg`);
-      await uploadBytes(imageRef, blob);
+      const data = {
+        file: `data:image/jpeg;base64,${base64}`,
+        upload_preset: process.env.EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET,
+        cloud_name: process.env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME,
+      };
 
-      const downloadURL = await getDownloadURL(imageRef);
+      const res = await fetch(
+        `https://api.cloudinary.com/v1_1/${process.env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(data),
+        }
+      );
 
-      await updateProfile(user, { photoURL: downloadURL });
+      const responseData = await res.json();
 
-      const userRef = doc(db, "users", user.uid);
-      const userDoc = await getDoc(userRef);
-
-      if (userDoc.exists()) {
-        await updateDoc(userRef, { photoURL: downloadURL });
+      if (responseData.secure_url) {
+        console.log("✅ Uploaded Image URL:", responseData.secure_url);
+        return responseData.secure_url;
       } else {
-        await setDoc(userRef, {
-          uid: user.uid,
-          name: user.displayName,
-          email: user.email,
-          photoURL: downloadURL,
-        });
+        console.log("❌ Cloudinary upload failed:", responseData);
+        Alert.alert("Upload Failed", responseData?.error?.message || "Unknown error");
+        return null;
       }
-
-      setPhotoURL(downloadURL);
-      Alert.alert("Success", "Profile picture updated!");
     } catch (error) {
-      Alert.alert("Error", error.message);
-    } finally {
-      setUploading(false);
+      console.error("Cloudinary upload failed:", error);
+      Alert.alert("Upload Error", error.message);
+      return null;
     }
   };
 
-  // ✏️ Update Name
+
+
+  // Save new display name
   const handleSaveName = async () => {
     if (!user) return;
-    if (name.trim() === "") return Alert.alert("Name cannot be empty");
+    if (name.trim() === "")
+      return Alert.alert("Validation", "Name cannot be empty");
 
     try {
       await updateProfile(user, { displayName: name });
 
       const userRef = doc(db, "users", user.uid);
       const userDoc = await getDoc(userRef);
-
       if (userDoc.exists()) {
         await updateDoc(userRef, { name });
       } else {
@@ -103,10 +138,74 @@ const Profile = () => {
         });
       }
 
+      await propagateProfileChange({
+        name,
+        photoURL: user.photoURL || photoURL,
+      });
+
       Alert.alert("Updated", "Name successfully changed!");
       setEditingName(false);
     } catch (error) {
       Alert.alert("Error", error.message);
+      console.error("Name update error:", error);
+    }
+  };
+
+  // Propagate profile name/photo changes to all chats
+  const propagateProfileChange = async ({ name: newName, photoURL: newPhoto }) => {
+    if (!user) return;
+    try {
+      const chatsCol = collection(db, "chats");
+      const chatsSnap = await getDocs(chatsCol);
+
+      const updates = [];
+
+      for (const chatDoc of chatsSnap.docs) {
+        const data = chatDoc.data();
+        let modified = false;
+        const updated = { ...data };
+
+        if (Array.isArray(data.users)) {
+          const newUsers = data.users.map((u) => {
+            if (u?.email === user.email) {
+              modified = true;
+              return {
+                ...u,
+                name: newName ?? u.name,
+                photoURL: newPhoto ?? u.photoURL,
+              };
+            }
+            return u;
+          });
+          if (modified) updated.users = newUsers;
+        }
+
+        if (Array.isArray(data.messages) && data.messages.length > 0) {
+          const newMessages = data.messages.map((m) => {
+            const userObj = m?.user;
+            const userId = userObj?._id || userObj?.id || userObj?.email;
+            if (userId === user.email) {
+              modified = true;
+              return {
+                ...m,
+                user: {
+                  ...userObj,
+                  name: newName ?? userObj.name,
+                  avatar: newPhoto ?? userObj.avatar,
+                },
+              };
+            }
+            return m;
+          });
+          if (modified) updated.messages = newMessages;
+        }
+
+        if (modified) updates.push(updateDoc(chatDoc.ref, updated));
+      }
+
+      if (updates.length > 0) await Promise.all(updates);
+    } catch (err) {
+      console.error("Error propagating profile change:", err);
     }
   };
 
@@ -119,7 +218,6 @@ const Profile = () => {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Avatar with Camera Icon */}
         <View style={styles.avatarContainer}>
           <TouchableOpacity onPress={pickImage}>
             {photoURL ? (
@@ -142,7 +240,6 @@ const Profile = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Name Section */}
         <View style={styles.infoBox}>
           {editingName ? (
             <View style={styles.editRow}>
@@ -169,7 +266,6 @@ const Profile = () => {
           )}
         </View>
 
-        {/* Email */}
         <View style={styles.infoBox}>
           <View style={styles.row}>
             <Ionicons name="mail-outline" size={20} color={colors.teal} />
@@ -177,7 +273,6 @@ const Profile = () => {
           </View>
         </View>
 
-        {/* About */}
         <View style={styles.infoBox}>
           <View style={styles.row}>
             <Ionicons
@@ -199,7 +294,6 @@ const Profile = () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f9f9f9" },
   scroll: { alignItems: "center", paddingBottom: 40 },
-
   avatarContainer: { marginTop: 20, marginBottom: 10, position: "relative" },
   avatar: {
     alignItems: "center",
@@ -223,7 +317,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: 36,
   },
-
   infoBox: {
     backgroundColor: "white",
     borderRadius: 12,

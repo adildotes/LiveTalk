@@ -7,23 +7,34 @@ const Cell = ({
   title,
   icon,
   iconColor = 'white',
-  tintColor,
+  tintColor = '#ccc',
   style,
   onPress,
   secondIcon,
   subtitle,
   showForwardIcon = true,
 }) => (
-  <TouchableOpacity style={[styles.cell, style]} onPress={onPress}>
+  <TouchableOpacity style={[styles.cell, style]} onPress={onPress} activeOpacity={0.7}>
     <View style={[styles.iconContainer, { backgroundColor: tintColor }]}>
-      <Ionicons name={icon} size={24} marginStart={4} color={iconColor} />
+      <Ionicons name={icon} size={20} color={iconColor} />
     </View>
 
     <View style={styles.textsContainer}>
-      <Text style={styles.title}>{title}</Text>
-      {subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
+      <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail">
+        {title}
+      </Text>
+      {subtitle && (
+        <Text style={styles.subtitle} numberOfLines={2} ellipsizeMode="tail">
+          {subtitle}
+        </Text>
+      )}
     </View>
-    {showForwardIcon && <Ionicons name={secondIcon ?? 'chevron-forward-outline'} size={20} />}
+
+    {showForwardIcon && (
+      <View style={styles.iconRight}>
+        <Ionicons name={secondIcon ?? 'chevron-forward-outline'} size={20} color="#6b6b6b" />
+      </View>
+    )}
   </TouchableOpacity>
 );
 
@@ -33,24 +44,30 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     flexDirection: 'row',
     paddingHorizontal: 16,
-    paddingVertical: 20,
+    paddingVertical: 14,
   },
   iconContainer: {
-    alignContent: 'center',
-    borderRadius: 6,
-    height: 32,
+    alignItems: 'center',
+    borderRadius: 8,
+    height: 40,
     justifyContent: 'center',
-    width: 32,
+    width: 40,
   },
   subtitle: {
     color: '#565656',
+    marginTop: 4,
+    fontSize: 13,
   },
   textsContainer: {
     flex: 1,
-    marginStart: 8,
+    marginStart: 12,
   },
   title: {
     fontSize: 16,
+    fontWeight: '500',
+  },
+  iconRight: {
+    marginLeft: 8,
   },
 });
 

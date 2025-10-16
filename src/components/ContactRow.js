@@ -5,51 +5,64 @@ import { Text, View, StyleSheet, TouchableOpacity } from 'react-native';
 
 import { colors } from '../config/constants';
 
+const makeInitials = (name) => {
+  if (!name || typeof name !== 'string') return '';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+};
+
 const ContactRow = ({
   name,
-  subtitle,
+  subtitle = '',
   onPress,
   style,
   onLongPress,
   selected,
   showForwardIcon = true,
-  subtitle2,
-  newMessageCount,
-}) => (
-  <TouchableOpacity style={[styles.row, style]} onPress={onPress} onLongPress={onLongPress}>
-    <View style={styles.avatar}>
-      <Text style={styles.avatarLabel}>
-        {name
-          .trim()
-          .split(' ')
-          .reduce((prev, current) => `${prev}${current[0]}`, '')}
-      </Text>
-    </View>
+  subtitle2 = '',
+  newMessageCount = 0,
+}) => {
+  const initials = makeInitials(name);
 
-    <View style={styles.textsContainer}>
-      <Text style={styles.name}>{name}</Text>
-      <Text style={styles.subtitle}>{subtitle}</Text>
-    </View>
+  return (
+    <TouchableOpacity style={[styles.row, style]} onPress={onPress} onLongPress={onLongPress} activeOpacity={0.7}>
+      <View style={styles.avatar}>
+        <Text style={styles.avatarLabel}>{initials}</Text>
+      </View>
 
-    <View style={styles.rightContainer}>
-      <Text style={styles.subtitle2}>{subtitle2}</Text>
+      <View style={styles.textsContainer}>
+        <Text style={styles.name} numberOfLines={1} ellipsizeMode="tail">
+          {name}
+        </Text>
+        {subtitle !== '' && (
+          <Text style={styles.subtitle} numberOfLines={1} ellipsizeMode="tail">
+            {subtitle}
+          </Text>
+        )}
+      </View>
 
-      {newMessageCount > 0 && (
-        <View style={styles.newMessageBadge}>
-          <Text style={styles.newMessageText}>{newMessageCount}</Text>
-        </View>
-      )}
+      <View style={styles.rightContainer}>
+        {subtitle2 !== '' && <Text style={styles.subtitle2}>{subtitle2}</Text>}
 
-      {selected && (
-        <View style={styles.overlay}>
-          <Ionicons name="checkmark-outline" size={16} color="white" />
-        </View>
-      )}
+        {newMessageCount > 0 && (
+          <View style={styles.newMessageBadge}>
+            <Text style={styles.newMessageText}>{newMessageCount}</Text>
+          </View>
+        )}
 
-      {showForwardIcon && <Ionicons name="chevron-forward-outline" size={20} />}
-    </View>
-  </TouchableOpacity>
-);
+        {selected && (
+          <View style={styles.overlay}>
+            <Ionicons name="checkmark-outline" size={14} color="white" />
+          </View>
+        )}
+
+        {showForwardIcon && <Ionicons name="chevron-forward-outline" size={20} color="#666" />}
+      </View>
+    </TouchableOpacity>
+  );
+};
 
 const styles = StyleSheet.create({
   avatar: {
@@ -62,7 +75,8 @@ const styles = StyleSheet.create({
   },
   avatarLabel: {
     color: 'white',
-    fontSize: 20,
+    fontSize: 18,
+    fontWeight: '700',
   },
   name: {
     fontSize: 16,
@@ -98,20 +112,20 @@ const styles = StyleSheet.create({
   rightContainer: {
     alignItems: 'flex-end',
     justifyContent: 'center',
+    minWidth: 40,
   },
   row: {
     alignItems: 'center',
     borderBottomWidth: 0.5,
     borderColor: '#e0e0e0',
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   subtitle: {
     color: '#565656',
     fontSize: 14,
     marginTop: 4,
-    maxWidth: 200,
   },
   subtitle2: {
     color: '#8e8e8e',
@@ -120,13 +134,13 @@ const styles = StyleSheet.create({
   },
   textsContainer: {
     flex: 1,
-    marginStart: 16,
+    marginStart: 12,
   },
 });
 
 ContactRow.propTypes = {
   name: PropTypes.string.isRequired,
-  subtitle: PropTypes.string.isRequired,
+  subtitle: PropTypes.string,
   onPress: PropTypes.func.isRequired,
   style: PropTypes.object,
   onLongPress: PropTypes.func,

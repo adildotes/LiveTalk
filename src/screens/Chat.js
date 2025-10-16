@@ -1,3 +1,4 @@
+// screens/Chat.js
 import PropTypes from "prop-types";
 import uuid from "react-native-uuid";
 import { Ionicons } from "@expo/vector-icons";
@@ -16,30 +17,20 @@ import {
   Dimensions,
 } from "react-native";
 import { doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
-import {
-  Send,
-  Bubble,
-  GiftedChat,
-  InputToolbar,
-} from "react-native-gifted-chat";
-import {
-  ref,
-  getStorage,
-  getDownloadURL,
-  uploadBytesResumable,
-} from "firebase/storage";
+import { Send, Bubble, GiftedChat, InputToolbar } from "react-native-gifted-chat";
 
 import { colors } from "../config/constants";
 import { auth, database } from "../config/firebase";
+import { CLOUDINARY_CONFIG } from "../config/cloudinary";
 
-// ✅ Loading overlay
+const { width } = Dimensions.get("window");
+
 const RenderLoadingUpload = () => (
   <View style={styles.loadingOverlay}>
     <ActivityIndicator size="large" color={colors.teal} />
   </View>
 );
 
-// ✅ Bubble styling
 const RenderBubble = (props) => (
   <Bubble
     {...props}
@@ -47,15 +38,15 @@ const RenderBubble = (props) => (
       right: {
         backgroundColor: colors.primary,
         borderRadius: 20,
-        padding: 4,
-        marginVertical: 2,
+        padding: 6,
+        marginVertical: 4,
         marginRight: 4,
       },
       left: {
         backgroundColor: "#f1f1f1",
         borderRadius: 20,
-        padding: 4,
-        marginVertical: 2,
+        padding: 6,
+        marginVertical: 4,
         marginLeft: 4,
       },
     }}
@@ -66,30 +57,23 @@ const RenderBubble = (props) => (
   />
 );
 
-// ✅ Emoji button
 const RenderEmojiButton = (handleEmojiPanel) => (
   <TouchableOpacity style={styles.iconBtn} onPress={handleEmojiPanel}>
     <Ionicons name="happy-outline" size={26} color={colors.teal} />
   </TouchableOpacity>
 );
 
-// ✅ Image button
 const RenderAttachButton = (onPick) => (
   <TouchableOpacity style={styles.iconBtn} onPress={onPick}>
     <Ionicons name="attach-outline" size={26} color={colors.teal} />
   </TouchableOpacity>
 );
 
-// ✅ Custom Input Toolbar
 const RenderInputToolbar = (props, handleEmojiPanel, pickImage) => (
   <View style={styles.inputWrapper}>
     {RenderEmojiButton(handleEmojiPanel)}
     {RenderAttachButton(pickImage)}
-    <InputToolbar
-      {...props}
-      containerStyle={styles.inputToolbar}
-      primaryStyle={{ alignItems: "center" }}
-    />
+    <InputToolbar {...props} containerStyle={styles.inputToolbar} primaryStyle={{ alignItems: "center" }} />
     <Send {...props} alwaysShowSend>
       <View style={styles.sendBtn}>
         <Ionicons name="send" size={20} color={colors.teal} />
@@ -103,22 +87,33 @@ function Chat({ route }) {
   const [modal, setModal] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // ✅ Realtime listener
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      doc(database, "chats", route.params.id),
-      (document) => {
-        if (document.exists()) {
-          setMessages(
-            document.data().messages.map((message) => ({
-              ...message,
-              createdAt: message.createdAt.toDate(),
-              image: message.image ?? "",
-            }))
-          );
-        }
+    const chatRef = doc(database, "chats", route.params.id);
+    const unsubscribe = onSnapshot(chatRef, (document) => {
+      if (!document.exists()) {
+        setMessages([]);
+        return;
       }
-    );
+      const data = document.data();
+      const msgs = (data.messages || [])
+        .map((m) => {
+          let createdAt = m.createdAt;
+          try {
+            // handle Firestore Timestamp or ISO string
+            createdAt = m.createdAt?.toDate?.() ?? (m.createdAt ? new Date(m.createdAt) : new Date());
+          } catch {
+            createdAt = new Date();
+          }
+          return {
+            ...m,
+            createdAt,
+            image: m.image ?? null,
+          };
+        })
+        .sort((a, b) => b.createdAt - a.createdAt);
+
+      setMessages(msgs);
+    });
 
     const backHandler = BackHandler.addEventListener("hardwareBackPress", () => {
       Keyboard.dismiss();
@@ -140,100 +135,120 @@ function Chat({ route }) {
     };
   }, [route.params.id, modal]);
 
-  // ✅ Send messages
   const onSend = useCallback(
     async (m = []) => {
       const chatDocRef = doc(database, "chats", route.params.id);
       const chatDocSnap = await getDoc(chatDocRef);
+      const chatData = chatDocSnap.data() || {};
+      const data = (chatData.messages || []).map((message) => ({
+        ...message,
+        createdAt: message.createdAt?.toDate?.() ?? new Date(message.createdAt),
+        image: message.image ?? null,
+      }));
 
-      const chatData = chatDocSnap.data();
-      const data =
-        chatData?.messages?.map((message) => ({
-          ...message,
-          createdAt: message.createdAt.toDate(),
-          image: message.image ?? "",
-        })) || [];
+      const messageToSend = {
+        ...m[0],
+        sent: true,
+        received: false,
+      };
 
-      const messagesWillSend = [{ ...m[0], sent: true, received: false }];
-      const chatMessages = GiftedChat.append(data, messagesWillSend);
+      const chatMessages = GiftedChat.append(data, messageToSend);
 
-      await setDoc(
-        chatDocRef,
-        {
-          messages: chatMessages,
-          lastUpdated: Date.now(),
-        },
-        { merge: true }
-      );
+      await setDoc(chatDocRef, {
+        messages: chatMessages,
+        lastUpdated: Date.now(),
+      }, { merge: true });
     },
     [route.params.id]
   );
 
-  // ✅ Pick Image
+  // pick image and upload to Cloudinary
   const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
-    });
-    if (!result.canceled) {
-      await uploadImageAsync(result.assets[0].uri);
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        return Alert.alert("Permission required", "Permission to access media library is required.");
+      }
+
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!res.canceled && res.assets?.length) {
+        await uploadImageAsync(res.assets[0].uri);
+      }
+    } catch (err) {
+      console.error("Pick image error:", err);
     }
   };
 
-  // ✅ Upload Image
+  // upload to Cloudinary and send as chat message
   const uploadImageAsync = async (uri) => {
-    setUploading(true);
-    const blob = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.onload = () => resolve(xhr.response);
-      xhr.onerror = () => reject(new TypeError("Network request failed"));
-      xhr.responseType = "blob";
-      xhr.open("GET", uri, true);
-      xhr.send(null);
-    });
+    if (!CLOUDINARY_CONFIG.uploadPreset || !CLOUDINARY_CONFIG.cloudName) {
+      Alert.alert("Cloudinary not configured", "Please set Cloudinary config.");
+      return;
+    }
 
-    const randomString = uuid.v4();
-    const fileRef = ref(getStorage(), randomString);
-    const uploadTask = uploadBytesResumable(fileRef, blob);
+    try {
+      setUploading(true);
 
-    uploadTask.on(
-      "state_changed",
-      null,
-      (error) => console.log(error),
-      async () => {
-        const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-        setUploading(false);
-        onSend([
-          {
-            _id: randomString,
-            createdAt: new Date(),
-            text: "",
-            image: downloadUrl,
-            user: {
-              _id: auth?.currentUser?.email,
-              name: auth?.currentUser?.displayName,
-              avatar: "https://i.pravatar.cc/300",
-            },
-          },
-        ]);
+      const response = await fetch(uri);
+      const blob = await response.blob();
+
+      const formData = new FormData();
+      formData.append("file", {
+        uri,
+        type: blob.type || "image/jpeg",
+        name: `chat_${uuid.v4()}.jpg`,
+      });
+      formData.append("upload_preset", CLOUDINARY_CONFIG.uploadPreset);
+
+      const uploadRes = await fetch(CLOUDINARY_CONFIG.uploadUrl, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!uploadRes.ok) {
+        const text = await uploadRes.text();
+        throw new Error("Cloudinary upload failed: " + text);
       }
-    );
+
+      const uploadJson = await uploadRes.json();
+      const imageUrl = uploadJson.secure_url;
+
+      // send message with imageUrl
+      onSend([
+        {
+          _id: uuid.v4(),
+          createdAt: new Date(),
+          text: "",
+          image: imageUrl,
+          user: {
+            _id: auth?.currentUser?.email,
+            name: auth?.currentUser?.displayName,
+            avatar: auth?.currentUser?.photoURL || "https://i.pravatar.cc/300",
+          },
+        },
+      ]);
+    } catch (err) {
+      console.error("Upload error:", err);
+      Alert.alert("Upload failed", err.message || String(err));
+    } finally {
+      setUploading(false);
+    }
   };
 
-  // ✅ Emoji toggle
   const handleEmojiPanel = useCallback(() => {
-    setModal((prevModal) => {
+    setModal((prev) => {
       Keyboard.dismiss();
-      return !prevModal;
+      return !prev;
     });
   }, []);
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#fff" }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-      keyboardVerticalOffset={90}
-    >
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "#fff" }} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={90}>
       {uploading && <RenderLoadingUpload />}
 
       <GiftedChat
@@ -242,16 +257,14 @@ function Chat({ route }) {
         user={{
           _id: auth?.currentUser?.email,
           name: auth?.currentUser?.displayName,
-          avatar: "https://i.pravatar.cc/300",
+          avatar: auth?.currentUser?.photoURL || "https://i.pravatar.cc/300",
         }}
         renderBubble={(props) => <RenderBubble {...props} />}
-        renderInputToolbar={(props) =>
-          RenderInputToolbar(props, handleEmojiPanel, pickImage)
-        }
+        renderInputToolbar={(props) => RenderInputToolbar(props, handleEmojiPanel, pickImage)}
         showAvatarForEveryMessage={false}
         renderAvatarOnTop
         renderUsernameOnMessage
-        minInputToolbarHeight={60}
+        minInputToolbarHeight={44}
         messagesContainerStyle={{ backgroundColor: "#fff" }}
         textInputStyle={{ color: "#333", fontSize: 15 }}
         scrollToBottom
@@ -274,7 +287,7 @@ function Chat({ route }) {
                 user: {
                   _id: auth?.currentUser?.email,
                   name: auth?.currentUser?.displayName,
-                  avatar: "https://i.pravatar.cc/300",
+                  avatar: auth?.currentUser?.photoURL || "https://i.pravatar.cc/300",
                 },
               },
             ]);
@@ -284,8 +297,6 @@ function Chat({ route }) {
     </KeyboardAvoidingView>
   );
 }
-
-const { width } = Dimensions.get("window");
 
 const styles = StyleSheet.create({
   loadingOverlay: {
@@ -311,6 +322,7 @@ const styles = StyleSheet.create({
     borderColor: "#ccc",
     marginHorizontal: 3,
     backgroundColor: "#fff",
+    marginBottom: 0,
   },
   sendBtn: {
     backgroundColor: "#fff",
@@ -335,7 +347,7 @@ const styles = StyleSheet.create({
   },
   emojiContainer: {
     height: 300,
-    width: width,
+    width,
   },
   emojiModal: {
     borderTopLeftRadius: 16,
