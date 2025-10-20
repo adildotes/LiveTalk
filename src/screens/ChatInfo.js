@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc } from 'firebase/firestore';
 import React, { useState, useEffect } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { View, Text, Alert, FlatList, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, Alert, FlatList, StyleSheet, TouchableOpacity, Image } from 'react-native';
 
 import Cell from '../components/Cell';
 import { colors } from '../config/constants';
@@ -46,7 +46,11 @@ const ChatInfo = ({ route }) => {
 
   const renderUser = ({ item }) => (
     <View style={styles.userContainer}>
-      <Ionicons name="person-outline" size={30} color={colors.primary} />
+      {item?.photoURL ? (
+        <Image source={{ uri: item.photoURL }} style={styles.userAvatar} />
+      ) : (
+        <Ionicons name="person-outline" size={30} color={colors.primary} />
+      )}
       <View style={styles.userInfo}>
         <Text style={styles.userName}>{item.name}</Text>
         <Text style={styles.userEmail}>{item.email}</Text>
@@ -59,11 +63,15 @@ const ChatInfo = ({ route }) => {
   return (
     <SafeAreaView style={styles.container}>
       <TouchableOpacity style={styles.avatar}>
-        <View>
-          <Text style={styles.avatarLabel}>
-            {chatName.split(' ').reduce((prev, current) => `${prev}${current[0]}`, '')}
-          </Text>
-        </View>
+        {users && users.length > 0 && users[0] && users[0].photoURL ? (
+          <Image source={{ uri: users[0].photoURL }} style={styles.avatarImage} />
+        ) : (
+          <View>
+            <Text style={styles.avatarLabel}>
+              {chatName.split(' ').reduce((prev, current) => `${prev}${current[0]}`, '')}
+            </Text>
+          </View>
+        )}
       </TouchableOpacity>
       <View style={styles.chatHeader}>
         {groupName ? (
@@ -174,6 +182,17 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 8,
+  },
+  avatarImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+  },
+  userAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 8,
   },
   usersTitle: {
     color: '#333',

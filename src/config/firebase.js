@@ -23,6 +23,15 @@ const firebaseConfig = {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
+// Basic sanity-check: warn if any important config values are missing
+const requiredKeys = ['apiKey', 'projectId', 'appId'];
+const missing = requiredKeys.filter((k) => !firebaseConfig[k]);
+if (missing.length > 0) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `Firebase config missing keys: ${missing.join(', ')}. This can cause Firestore connection failures.`
+  );
+}
 
 const persistence =
   Platform.OS === 'web'
@@ -31,4 +40,5 @@ const persistence =
 
 export const auth = initializeAuth(app, { persistence });
 
-export const database = getFirestore();
+// Use the initialized app instance explicitly — helps avoid ambiguous default app issues
+export const database = getFirestore(app);

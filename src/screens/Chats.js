@@ -81,18 +81,21 @@ const Chats = ({ setUnreadCount = () => { } }) => {
         const chatsRef = collection(database, 'chats');
 
         // NOTE: Firestore may require a composite index for (where array-contains + orderBy).
-        const q = query(
-          chatsRef,
-          where('users', 'array-contains', currentUserEmail),
-          orderBy('lastUpdated', 'desc')
-        );
+        // Some apps store users as objects in the users array; Firestore array-contains with a string
+        // won't match object entries. Query ordered chats then filter client-side for current user's email.
+        const q = query(chatsRef, orderBy('lastUpdated', 'desc'));
 
         unsubscribe = onSnapshot(
           q,
           (snapshot) => {
-            // map docs to plain objects
-            const chatDocs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-            setChats(chatDocs);
+            // map docs to plain objects and filter to chats that include this user
+            const allChatDocs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+            const filtered = allChatDocs.filter((chat) => {
+              const users = chat.users || [];
+              if (!Array.isArray(users)) return false;
+              return users.some((u) => (u && u.email) ? u.email === currentUserEmail : u === currentUserEmail);
+            });
+            setChats(filtered);
             setLoading(false);
 
             // handle doc changes to increase unread counts only for incoming messages
@@ -352,6 +355,26 @@ const Chats = ({ setUnreadCount = () => { } }) => {
                 selected={getSelected(chat)}
                 showForwardIcon={false}
                 newMessageCount={newMessages[chat.id] || 0}
+                avatar={(() => {
+                  try {
+                    const users = chat.users || [];
+                    const currentEmail = auth?.currentUser?.email;
+                    if (!Array.isArray(users) || users.length === 0) return undefined;
+                    // For group chats, we don't have a single avatar
+                    if (chat.groupName) return undefined;
+
+                    const other = users.find((u) => {
+                      if (!u) return false;
+                      if (typeof u === 'string') return u !== currentEmail;
+                      return (u.email && u.email !== currentEmail) || (u.id && u.id !== currentEmail);
+                    });
+
+                    if (!other) return undefined;
+                    return typeof other === 'string' ? undefined : (other.photoURL || other.avatar || undefined);
+                  } catch (e) {
+                    return undefined;
+                  }
+                })()}
               />
             ))
           )}

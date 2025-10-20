@@ -42,6 +42,7 @@ const Settings = ({ navigation }) => {
           subtitle={user?.email ?? "No email available"}
           style={styles.contactRow}
           onPress={() => navigation.navigate("Profile")}
+          avatar={user?.photoURL}
         />
 
         {/* 🧩 Account Settings */}

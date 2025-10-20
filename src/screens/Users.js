@@ -5,7 +5,11 @@ import {
   StyleSheet,
   ScrollView,
   SafeAreaView,
-  Alert
+  Alert,
+  Modal,
+  TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import {
@@ -39,20 +43,12 @@ const Users = () => {
     });
 
     const collectionChatsRef = collection(database, "chats");
-    const chatsQuery = query(
-      collectionChatsRef,
-      where("users", "array-contains", {
-        email: auth.currentUser.email,
-        name: auth.currentUser.displayName || "",
-        deletedFromChat: false,
-      }),
-      where("groupName", "==", "")
-    );
+    // Query chats where groupName is empty, then filter client-side for current user's email.
+    const chatsQuery = query(collectionChatsRef, where("groupName", "==", ""));
     const unsubscribeChats = onSnapshot(chatsQuery, (snapshot) => {
-      const existing = snapshot.docs.map((chat) => ({
-        chatId: chat.id,
-        userEmails: chat.data().users,
-      }));
+      const existing = snapshot.docs
+        .map((chat) => ({ chatId: chat.id, userEmails: chat.data().users }))
+        .filter((c) => Array.isArray(c.userEmails) && c.userEmails.some((u) => (u && u.email) ? u.email === auth.currentUser.email : u === auth.currentUser.email));
       setExistingChats(existing);
     });
 
@@ -153,7 +149,61 @@ const Users = () => {
 
   // 🧩 Navigation shortcuts
   const handleNewGroup = () => navigation.navigate("Group");
-  const handleNewUser = () => Alert.alert("Feature Coming Soon", "Invite users");
+  // New user modal state
+  const [newUserModalVisible, setNewUserModalVisible] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [lookupLoading, setLookupLoading] = useState(false);
+
+  const handleNewUser = () => setNewUserModalVisible(true);
+
+  const closeNewUserModal = () => {
+    setNewUserModalVisible(false);
+    setNewUserEmail("");
+    setLookupLoading(false);
+  };
+
+  // Lookup user by email from users collection and navigate/create chat
+  const submitNewUserEmail = async () => {
+    const email = (newUserEmail || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      Alert.alert("Invalid email", "Please enter a valid email address.");
+      return;
+    }
+
+    try {
+      setLookupLoading(true);
+      const usersRef = collection(database, "users");
+      const q = query(usersRef, where("email", "==", email));
+      const snap = await new Promise((resolve, reject) => {
+        const unsub = onSnapshot(
+          q,
+          (s) => {
+            unsub();
+            resolve(s);
+          },
+          (err) => {
+            unsub();
+            reject(err);
+          }
+        );
+      });
+
+      if (!snap || snap.empty) {
+        Alert.alert("User not found", "No registered user found with this email.");
+        setLookupLoading(false);
+        return;
+      }
+
+      const userDoc = snap.docs[0];
+      // reuse handleNavigate logic but we need a wrapper to accept a doc-like object
+      await handleNavigate(userDoc);
+      closeNewUserModal();
+    } catch (err) {
+      console.log("Lookup error", err);
+      Alert.alert("Error", "Could not look up user. Try again.");
+      setLookupLoading(false);
+    }
+  };
 
   // 🧩 Render
   return (
@@ -173,6 +223,34 @@ const Users = () => {
         style={{ marginBottom: 10 }}
       />
 
+      <Modal visible={newUserModalVisible} animationType="slide" transparent>
+        <View style={{ flex: 1, justifyContent: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', borderRadius: 8, padding: 16, elevation: 5 }}>
+            <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 8 }}>Add user by email</Text>
+            <TextInput
+              placeholder="user@example.com"
+              value={newUserEmail}
+              onChangeText={setNewUserEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              style={{ borderWidth: 1, borderColor: '#ddd', padding: 8, borderRadius: 6, marginBottom: 12 }}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+              <TouchableOpacity onPress={closeNewUserModal} style={{ padding: 8, marginRight: 8 }}>
+                <Text style={{ color: '#777' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={submitNewUserEmail} style={{ padding: 8 }} accessibilityRole="button">
+                {lookupLoading ? (
+                  <ActivityIndicator />
+                ) : (
+                  <Text style={{ color: colors.teal, fontWeight: '600' }}>Add</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {users.length === 0 ? (
         <View style={styles.blankContainer}>
           <Text style={styles.textContainer}>No registered users yet</Text>
@@ -187,6 +265,7 @@ const Users = () => {
                 subtitle={handleSubtitle(user)}
                 onPress={() => handleNavigate(user)}
                 showForwardIcon={false}
+                avatar={user.data()?.photoURL}
               />
             </Fragment>
           ))}

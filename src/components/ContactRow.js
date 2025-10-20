@@ -1,7 +1,7 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import { Ionicons } from '@expo/vector-icons';
-import { Text, View, StyleSheet, TouchableOpacity } from 'react-native';
+import { Text, View, StyleSheet, TouchableOpacity, Image } from 'react-native';
 
 import { colors } from '../config/constants';
 
@@ -23,14 +23,19 @@ const ContactRow = ({
   showForwardIcon = true,
   subtitle2 = '',
   newMessageCount = 0,
+  avatar,
 }) => {
   const initials = makeInitials(name);
 
   return (
     <TouchableOpacity style={[styles.row, style]} onPress={onPress} onLongPress={onLongPress} activeOpacity={0.7}>
-      <View style={styles.avatar}>
-        <Text style={styles.avatarLabel}>{initials}</Text>
-      </View>
+      {avatar ? (
+        <Image source={{ uri: avatar }} style={styles.avatarImage} />
+      ) : (
+        <View style={styles.avatar}>
+          <Text style={styles.avatarLabel}>{initials}</Text>
+        </View>
+      )}
 
       <View style={styles.textsContainer}>
         <Text style={styles.name} numberOfLines={1} ellipsizeMode="tail">
@@ -136,6 +141,12 @@ const styles = StyleSheet.create({
     flex: 1,
     marginStart: 12,
   },
+  avatarImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary,
+  },
 });
 
 ContactRow.propTypes = {
@@ -148,6 +159,7 @@ ContactRow.propTypes = {
   showForwardIcon: PropTypes.bool,
   subtitle2: PropTypes.string,
   newMessageCount: PropTypes.number,
+  avatar: PropTypes.string,
 };
 
 export default ContactRow;

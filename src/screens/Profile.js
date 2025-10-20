@@ -14,6 +14,7 @@ import {
   Dimensions,
   ScrollView,
 } from "react-native";
+import { Platform } from 'react-native';
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { updateProfile } from "firebase/auth";
@@ -25,7 +26,7 @@ import {
   collection,
   getDocs,
 } from "firebase/firestore";
-import { auth, db } from "../config/firebase";
+import { auth, database } from "../config/firebase";
 import { colors } from "../config/constants";
 import { CLOUDINARY_CONFIG } from "../config/cloudinary";
 
@@ -55,11 +56,8 @@ const Profile = () => {
   // Pick image
   const pickImage = async () => {
     // open gallery
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 1,
-    });
+    const mediaTypes = ImagePicker.MediaType?.Images || ImagePicker.MediaTypeOptions?.Images || ImagePicker.MediaTypeOptions;
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes, allowsEditing: true, aspect: [1, 1], quality: 0.7 });
 
     // agar user ne cancel nahi kiya
     if (!result.canceled) {
@@ -69,48 +67,70 @@ const Profile = () => {
       // Cloudinary upload function call karo
       const uploadedUrl = await uploadImageToCloudinary(image);
       console.log("Uploaded Image URL:", uploadedUrl);
+
+      if (uploadedUrl) {
+        try {
+          // update firebase auth profile
+          await updateProfile(user, { photoURL: uploadedUrl });
+
+          // update users collection
+          const userRef = doc(database, 'users', user.uid);
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            await updateDoc(userRef, { photoURL: uploadedUrl });
+          } else {
+            await setDoc(userRef, { uid: user.uid, name: user.displayName || name, email: user.email, photoURL: uploadedUrl });
+          }
+
+          // propagate to chats
+          await propagateProfileChange({ photoURL: uploadedUrl, name: user.displayName || name });
+
+          setPhotoURL(uploadedUrl);
+          Alert.alert('Success', 'Profile picture updated!');
+        } catch (err) {
+          console.error('Error updating profile after upload:', err);
+          Alert.alert('Error', err.message || String(err));
+        }
+      }
     }
   };
 
   // Upload image to Cloudinary
   const uploadImageToCloudinary = async (image) => {
     try {
-      // ✅ image.uri milta hai ImagePicker se
-      const base64 = await FileSystem.readAsStringAsync(image.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      setUploading(true);
 
-      const data = {
-        file: `data:image/jpeg;base64,${base64}`,
-        upload_preset: process.env.EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET,
-        cloud_name: process.env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME,
-      };
+      const response = await fetch(image.uri);
+      const blob = await response.blob();
+      const formData = new FormData();
+      const fileName = `profile_${user.uid}.jpg`;
 
-      const res = await fetch(
-        `https://api.cloudinary.com/v1_1/${process.env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(data),
-        }
-      );
+      if (Platform.OS === 'web') {
+        const file = new File([blob], fileName, { type: blob.type || 'image/jpeg' });
+        formData.append('file', file);
+      } else {
+        formData.append('file', { uri: image.uri, type: blob.type || 'image/jpeg', name: fileName });
+      }
 
+      formData.append('upload_preset', CLOUDINARY_CONFIG.uploadPreset);
+
+      const uploadUrl = typeof CLOUDINARY_CONFIG.uploadUrl === 'function'
+        ? CLOUDINARY_CONFIG.uploadUrl(CLOUDINARY_CONFIG.cloudName)
+        : CLOUDINARY_CONFIG.uploadUrl;
+
+      const res = await fetch(uploadUrl, { method: 'POST', body: formData });
       const responseData = await res.json();
 
-      if (responseData.secure_url) {
-        console.log("✅ Uploaded Image URL:", responseData.secure_url);
-        return responseData.secure_url;
-      } else {
-        console.log("❌ Cloudinary upload failed:", responseData);
-        Alert.alert("Upload Failed", responseData?.error?.message || "Unknown error");
-        return null;
-      }
-    } catch (error) {
-      console.error("Cloudinary upload failed:", error);
-      Alert.alert("Upload Error", error.message);
+      if (responseData?.secure_url) return responseData.secure_url;
+
+      Alert.alert('Upload Failed', responseData?.error?.message || 'Unknown error');
       return null;
+    } catch (error) {
+      console.error('Cloudinary upload failed:', error);
+      Alert.alert('Upload Error', error.message || String(error));
+      return null;
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -125,7 +145,7 @@ const Profile = () => {
     try {
       await updateProfile(user, { displayName: name });
 
-      const userRef = doc(db, "users", user.uid);
+      const userRef = doc(database, "users", user.uid);
       const userDoc = await getDoc(userRef);
       if (userDoc.exists()) {
         await updateDoc(userRef, { name });
@@ -155,7 +175,7 @@ const Profile = () => {
   const propagateProfileChange = async ({ name: newName, photoURL: newPhoto }) => {
     if (!user) return;
     try {
-      const chatsCol = collection(db, "chats");
+      const chatsCol = collection(database, "chats");
       const chatsSnap = await getDocs(chatsCol);
 
       const updates = [];
@@ -167,7 +187,18 @@ const Profile = () => {
 
         if (Array.isArray(data.users)) {
           const newUsers = data.users.map((u) => {
-            if (u?.email === user.email) {
+            // when users are stored as plain strings (email), replace with object
+            if (typeof u === 'string' && u === user.email) {
+              modified = true;
+              return {
+                email: user.email,
+                name: newName ?? user.displayName ?? user.email,
+                photoURL: newPhoto ?? user.photoURL ?? null,
+                deletedFromChat: false,
+              };
+            }
+
+            if (u && typeof u === 'object' && u.email === user.email) {
               modified = true;
               return {
                 ...u,
@@ -175,6 +206,7 @@ const Profile = () => {
                 photoURL: newPhoto ?? u.photoURL,
               };
             }
+
             return u;
           });
           if (modified) updated.users = newUsers;
@@ -192,6 +224,18 @@ const Profile = () => {
                   ...userObj,
                   name: newName ?? userObj.name,
                   avatar: newPhoto ?? userObj.avatar,
+                },
+              };
+            }
+            // if message.user stored as string email
+            if (typeof userObj === 'string' && userObj === user.email) {
+              modified = true;
+              return {
+                ...m,
+                user: {
+                  _id: user.email,
+                  name: newName ?? user.displayName ?? user.email,
+                  avatar: newPhoto ?? user.photoURL ?? null,
                 },
               };
             }

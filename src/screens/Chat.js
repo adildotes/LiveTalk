@@ -1,10 +1,11 @@
 // screens/Chat.js
-import PropTypes from "prop-types";
-import uuid from "react-native-uuid";
-import { Ionicons } from "@expo/vector-icons";
-import * as ImagePicker from "expo-image-picker";
-import EmojiModal from "react-native-emoji-modal";
-import React, { useState, useEffect, useCallback } from "react";
+// screens/Chat.js
+import PropTypes from 'prop-types';
+import uuid from 'react-native-uuid';
+import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import EmojiModal from 'react-native-emoji-modal';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Keyboard,
@@ -15,15 +16,19 @@ import {
   KeyboardAvoidingView,
   Platform,
   Dimensions,
-} from "react-native";
-import { doc, setDoc, getDoc, onSnapshot } from "firebase/firestore";
-import { Send, Bubble, GiftedChat, InputToolbar } from "react-native-gifted-chat";
+  Alert,
+  Modal,
+  Image,
+  TouchableWithoutFeedback,
+} from 'react-native';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { Send, Bubble, GiftedChat, InputToolbar } from 'react-native-gifted-chat';
 
-import { colors } from "../config/constants";
-import { auth, database } from "../config/firebase";
-import { CLOUDINARY_CONFIG } from "../config/cloudinary";
+import { colors } from '../config/constants';
+import { auth, database } from '../config/firebase';
+import { CLOUDINARY_CONFIG } from '../config/cloudinary';
 
-const { width } = Dimensions.get("window");
+const { width } = Dimensions.get('window');
 
 const RenderLoadingUpload = () => (
   <View style={styles.loadingOverlay}>
@@ -43,17 +48,14 @@ const RenderBubble = (props) => (
         marginRight: 4,
       },
       left: {
-        backgroundColor: "#f1f1f1",
+        backgroundColor: '#f1f1f1',
         borderRadius: 20,
         padding: 6,
         marginVertical: 4,
         marginLeft: 4,
       },
     }}
-    textStyle={{
-      right: { color: "#fff", fontSize: 15 },
-      left: { color: "#333", fontSize: 15 },
-    }}
+    textStyle={{ right: { color: '#fff', fontSize: 15 }, left: { color: '#333', fontSize: 15 } }}
   />
 );
 
@@ -73,7 +75,7 @@ const RenderInputToolbar = (props, handleEmojiPanel, pickImage) => (
   <View style={styles.inputWrapper}>
     {RenderEmojiButton(handleEmojiPanel)}
     {RenderAttachButton(pickImage)}
-    <InputToolbar {...props} containerStyle={styles.inputToolbar} primaryStyle={{ alignItems: "center" }} />
+    <InputToolbar {...props} containerStyle={styles.inputToolbar} primaryStyle={{ alignItems: 'center' }} />
     <Send {...props} alwaysShowSend>
       <View style={styles.sendBtn}>
         <Ionicons name="send" size={20} color={colors.teal} />
@@ -82,32 +84,55 @@ const RenderInputToolbar = (props, handleEmojiPanel, pickImage) => (
   </View>
 );
 
-function Chat({ route }) {
+export default function Chat({ route }) {
   const [messages, setMessages] = useState([]);
   const [modal, setModal] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [imageModalVisible, setImageModalVisible] = useState(false);
+  const [imageToView, setImageToView] = useState(null);
 
   useEffect(() => {
-    const chatRef = doc(database, "chats", route.params.id);
+    const chatRef = doc(database, 'chats', route.params.id);
     const unsubscribe = onSnapshot(chatRef, (document) => {
       if (!document.exists()) {
         setMessages([]);
         return;
       }
       const data = document.data();
-      const msgs = (data.messages || [])
+      const rawMsgs = data.messages || [];
+      const currentEmail = auth?.currentUser?.email;
+
+      // filter messages deleted for this user
+      const visibleMsgs = rawMsgs.filter((m) => {
+        const deletedFor = m?.deletedFor || [];
+        return !Array.isArray(deletedFor) || !deletedFor.includes(currentEmail);
+      });
+
+      const msgs = visibleMsgs
         .map((m) => {
-          let createdAt = m.createdAt;
-          try {
-            // handle Firestore Timestamp or ISO string
-            createdAt = m.createdAt?.toDate?.() ?? (m.createdAt ? new Date(m.createdAt) : new Date());
-          } catch {
-            createdAt = new Date();
-          }
+          const created = m.createdAt?.toDate?.() ?? (m.createdAt ? new Date(m.createdAt) : new Date());
+          const user = m.user || {};
+
+          const avatar = user.avatar || user.photoURL || (Array.isArray(data.users)
+            ? (() => {
+              const other = data.users.find((u) => {
+                if (!u) return false;
+                if (typeof u === 'string') return u !== currentEmail;
+                return (u.email && u.email !== currentEmail) || (u.id && u.id !== currentEmail);
+              });
+              return other && typeof other !== 'string' ? (other.photoURL || other.avatar) : undefined;
+            })()
+            : undefined);
+
           return {
             ...m,
-            createdAt,
+            createdAt: created,
             image: m.image ?? null,
+            user: {
+              _id: user._id || user.email || user.id,
+              name: user.name || user.displayName || '',
+              avatar: avatar || undefined,
+            },
           };
         })
         .sort((a, b) => b.createdAt - a.createdAt);
@@ -115,7 +140,7 @@ function Chat({ route }) {
       setMessages(msgs);
     });
 
-    const backHandler = BackHandler.addEventListener("hardwareBackPress", () => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       Keyboard.dismiss();
       if (modal) {
         setModal(false);
@@ -124,7 +149,7 @@ function Chat({ route }) {
       return false;
     });
 
-    const keyboardDidShowListener = Keyboard.addListener("keyboardDidShow", () => {
+    const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
       if (modal) setModal(false);
     });
 
@@ -137,7 +162,7 @@ function Chat({ route }) {
 
   const onSend = useCallback(
     async (m = []) => {
-      const chatDocRef = doc(database, "chats", route.params.id);
+      const chatDocRef = doc(database, 'chats', route.params.id);
       const chatDocSnap = await getDoc(chatDocRef);
       const chatData = chatDocSnap.data() || {};
       const data = (chatData.messages || []).map((message) => ({
@@ -152,7 +177,8 @@ function Chat({ route }) {
         received: false,
       };
 
-      const chatMessages = GiftedChat.append(data, messageToSend);
+      const chatMessages = [...data];
+      chatMessages.unshift(messageToSend);
 
       await setDoc(chatDocRef, {
         messages: chatMessages,
@@ -162,32 +188,27 @@ function Chat({ route }) {
     [route.params.id]
   );
 
-  // pick image and upload to Cloudinary
   const pickImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        return Alert.alert("Permission required", "Permission to access media library is required.");
+      const perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') {
+        const req = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (req.status !== 'granted') {
+          return Alert.alert('Permission required', 'Permission to access media library is required.');
+        }
       }
 
-      const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        quality: 0.8,
-      });
-
-      if (!res.canceled && res.assets?.length) {
-        await uploadImageAsync(res.assets[0].uri);
-      }
+      const mediaTypes = ImagePicker.MediaType?.Images || ImagePicker.MediaTypeOptions?.Images || ImagePicker.MediaTypeOptions;
+      const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes, allowsEditing: true, quality: 0.8 });
+      if (!res.canceled && res.assets?.length) await uploadImageAsync(res.assets[0].uri);
     } catch (err) {
-      console.error("Pick image error:", err);
+      console.error('Pick image error:', err);
     }
   };
 
-  // upload to Cloudinary and send as chat message
   const uploadImageAsync = async (uri) => {
     if (!CLOUDINARY_CONFIG.uploadPreset || !CLOUDINARY_CONFIG.cloudName) {
-      Alert.alert("Cloudinary not configured", "Please set Cloudinary config.");
+      Alert.alert('Cloudinary not configured', 'Please set Cloudinary config.');
       return;
     }
 
@@ -198,21 +219,26 @@ function Chat({ route }) {
       const blob = await response.blob();
 
       const formData = new FormData();
-      formData.append("file", {
-        uri,
-        type: blob.type || "image/jpeg",
-        name: `chat_${uuid.v4()}.jpg`,
-      });
-      formData.append("upload_preset", CLOUDINARY_CONFIG.uploadPreset);
+      const fileName = `chat_${uuid.v4()}.jpg`;
 
-      const uploadRes = await fetch(CLOUDINARY_CONFIG.uploadUrl, {
-        method: "POST",
-        body: formData,
-      });
+      if (Platform.OS === 'web') {
+        const file = new File([blob], fileName, { type: blob.type || 'image/jpeg' });
+        formData.append('file', file);
+      } else {
+        formData.append('file', { uri, type: blob.type || 'image/jpeg', name: fileName });
+      }
+
+      formData.append('upload_preset', CLOUDINARY_CONFIG.uploadPreset);
+
+      const uploadUrl = typeof CLOUDINARY_CONFIG.uploadUrl === 'function'
+        ? CLOUDINARY_CONFIG.uploadUrl(CLOUDINARY_CONFIG.cloudName)
+        : CLOUDINARY_CONFIG.uploadUrl;
+
+      const uploadRes = await fetch(uploadUrl, { method: 'POST', body: formData });
 
       if (!uploadRes.ok) {
         const text = await uploadRes.text();
-        throw new Error("Cloudinary upload failed: " + text);
+        throw new Error('Cloudinary upload failed: ' + text);
       }
 
       const uploadJson = await uploadRes.json();
@@ -223,18 +249,18 @@ function Chat({ route }) {
         {
           _id: uuid.v4(),
           createdAt: new Date(),
-          text: "",
+          text: '',
           image: imageUrl,
           user: {
             _id: auth?.currentUser?.email,
             name: auth?.currentUser?.displayName,
-            avatar: auth?.currentUser?.photoURL || "https://i.pravatar.cc/300",
+            avatar: auth?.currentUser?.photoURL || 'https://i.pravatar.cc/300',
           },
         },
       ]);
     } catch (err) {
-      console.error("Upload error:", err);
-      Alert.alert("Upload failed", err.message || String(err));
+      console.error('Upload error:', err);
+      Alert.alert('Upload failed', err.message || String(err));
     } finally {
       setUploading(false);
     }
@@ -247,8 +273,56 @@ function Chat({ route }) {
     });
   }, []);
 
+  const openImage = (uri) => {
+    setImageToView(uri);
+    setImageModalVisible(true);
+  };
+
+  const closeImage = () => {
+    setImageToView(null);
+    setImageModalVisible(false);
+  };
+
+  const deleteMessage = async (messageId, mode = 'forMe') => {
+    try {
+      const chatRef = doc(database, 'chats', route.params.id);
+      const snap = await getDoc(chatRef);
+      if (!snap.exists()) return;
+      const data = snap.data() || {};
+      const msgs = Array.isArray(data.messages) ? data.messages : [];
+
+      if (mode === 'forEveryone') {
+        const newMsgs = msgs.filter((m) => m._id !== messageId);
+        await updateDoc(chatRef, { messages: newMsgs });
+        return;
+      }
+
+      const currentEmail = auth?.currentUser?.email;
+      const newMsgs = msgs.map((m) => {
+        if (m._id !== messageId) return m;
+        const deletedFor = Array.isArray(m.deletedFor) ? m.deletedFor : [];
+        if (!deletedFor.includes(currentEmail)) deletedFor.push(currentEmail);
+        return { ...m, deletedFor };
+      });
+
+      await updateDoc(chatRef, { messages: newMsgs });
+    } catch (err) {
+      console.error('Delete message error', err);
+    }
+  };
+
+  const handleLongPress = (context, message) => {
+    const isMine = message.user && (message.user._id === auth?.currentUser?.email || message.user._id === auth?.currentUser?.uid);
+    const options = [];
+    options.push({ text: 'Delete for me', onPress: () => deleteMessage(message._id, 'forMe') });
+    if (isMine) options.push({ text: 'Delete for everyone', onPress: () => deleteMessage(message._id, 'forEveryone') });
+    options.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert('Message options', 'Choose an action', options, { cancelable: true });
+  };
+
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "#fff" }} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={90}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#fff' }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
       {uploading && <RenderLoadingUpload />}
 
       <GiftedChat
@@ -257,19 +331,35 @@ function Chat({ route }) {
         user={{
           _id: auth?.currentUser?.email,
           name: auth?.currentUser?.displayName,
-          avatar: auth?.currentUser?.photoURL || "https://i.pravatar.cc/300",
+          avatar: auth?.currentUser?.photoURL || 'https://i.pravatar.cc/300',
         }}
         renderBubble={(props) => <RenderBubble {...props} />}
         renderInputToolbar={(props) => RenderInputToolbar(props, handleEmojiPanel, pickImage)}
-        showAvatarForEveryMessage={false}
+        showAvatarForEveryMessage={true}
         renderAvatarOnTop
         renderUsernameOnMessage
         minInputToolbarHeight={44}
-        messagesContainerStyle={{ backgroundColor: "#fff" }}
-        textInputStyle={{ color: "#333", fontSize: 15 }}
+        messagesContainerStyle={{ backgroundColor: '#fff' }}
+        textInputStyle={{ color: '#333', fontSize: 15 }}
         scrollToBottom
         scrollToBottomStyle={styles.scrollToBottom}
+        onLongPress={handleLongPress}
+        renderMessageImage={(props) => (
+          <TouchableWithoutFeedback onPress={() => openImage(props.currentMessage.image)}>
+            <Image source={{ uri: props.currentMessage.image }} style={{ width: 200, height: 200, borderRadius: 12 }} />
+          </TouchableWithoutFeedback>
+        )}
       />
+
+      {imageModalVisible && (
+        <Modal visible transparent onRequestClose={closeImage}>
+          <TouchableWithoutFeedback onPress={closeImage}>
+            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' }}>
+              <Image source={{ uri: imageToView }} style={{ width: width - 40, height: width - 40, resizeMode: 'contain' }} />
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
+      )}
 
       {modal && (
         <EmojiModal
@@ -287,7 +377,7 @@ function Chat({ route }) {
                 user: {
                   _id: auth?.currentUser?.email,
                   name: auth?.currentUser?.displayName,
-                  avatar: auth?.currentUser?.photoURL || "https://i.pravatar.cc/300",
+                  avatar: auth?.currentUser?.photoURL || 'https://i.pravatar.cc/300',
                 },
               },
             ]);
@@ -301,38 +391,38 @@ function Chat({ route }) {
 const styles = StyleSheet.create({
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
     zIndex: 999,
   },
   inputWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 6,
     paddingVertical: 4,
-    backgroundColor: "#fafafa",
+    backgroundColor: '#fafafa',
     borderTopWidth: 0.5,
-    borderColor: "#ddd",
+    borderColor: '#ddd',
   },
   inputToolbar: {
     flex: 1,
     borderRadius: 20,
     borderWidth: 0.5,
-    borderColor: "#ccc",
+    borderColor: '#ccc',
     marginHorizontal: 3,
-    backgroundColor: "#fff",
+    backgroundColor: '#fff',
     marginBottom: 0,
   },
   sendBtn: {
-    backgroundColor: "#fff",
+    backgroundColor: '#fff',
     borderRadius: 20,
     borderWidth: 0.5,
-    borderColor: "#ccc",
+    borderColor: '#ccc',
     height: 40,
     width: 40,
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent: 'center',
+    alignItems: 'center',
     marginHorizontal: 4,
   },
   iconBtn: {
@@ -342,8 +432,8 @@ const styles = StyleSheet.create({
   scrollToBottom: {
     borderRadius: 25,
     borderWidth: 1,
-    borderColor: "#ccc",
-    backgroundColor: "white",
+    borderColor: '#ccc',
+    backgroundColor: 'white',
   },
   emojiContainer: {
     height: 300,
@@ -356,4 +446,3 @@ const styles = StyleSheet.create({
 });
 
 Chat.propTypes = { route: PropTypes.object.isRequired };
-export default Chat;
